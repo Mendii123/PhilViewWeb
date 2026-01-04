@@ -15,8 +15,13 @@ const firebaseConfig = {
 
 // Avoid reinitializing in hot-reload.
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+const getSecondaryApp = () => {
+  const existing = getApps().find((candidate) => candidate.name === "secondary");
+  return existing ?? initializeApp(firebaseConfig, "secondary");
+};
 
 export const auth = getAuth(app);
+export const secondaryAuth = getAuth(getSecondaryApp());
 export const googleProvider = new GoogleAuthProvider();
 export const db = getFirestore(app);
 

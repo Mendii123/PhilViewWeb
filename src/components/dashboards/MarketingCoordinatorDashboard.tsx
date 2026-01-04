@@ -28,6 +28,7 @@ export function MarketingCoordinatorDashboard({ currentPage }: MarketingCoordina
   const [selectedInquiry, setSelectedInquiry] = useState<InquiryRecord | null>(null);
   const [responseText, setResponseText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const marketingAppointments = appointments.filter((a) => (a.department ?? 'broker') === 'marketing');
 
   useEffect(() => {
     let isMounted = true;
@@ -57,10 +58,10 @@ export function MarketingCoordinatorDashboard({ currentPage }: MarketingCoordina
 
   const metrics = useMemo(() => {
     const pendingInquiries = inquiries.filter((i) => i.status === 'New').length;
-    const pendingAppointments = appointments.filter((a) => a.status === 'Pending').length;
-    const confirmedAppointments = appointments.filter((a) => a.status === 'Confirmed').length;
+    const pendingAppointments = marketingAppointments.filter((a) => a.status === 'Pending').length;
+    const confirmedAppointments = marketingAppointments.filter((a) => a.status === 'Confirmed').length;
     return { pendingInquiries, pendingAppointments, confirmedAppointments };
-  }, [appointments, inquiries]);
+  }, [inquiries, marketingAppointments]);
 
   const confirmAppointment = async (appt: AppointmentRecord) => {
     setAppointments((prev) =>
@@ -186,7 +187,7 @@ export function MarketingCoordinatorDashboard({ currentPage }: MarketingCoordina
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <h1 className="text-3xl font-bold mb-8">Appointment Confirmation</h1>
         <div className="space-y-4">
-          {appointments.map((appointment) => (
+          {marketingAppointments.map((appointment) => (
             <Card key={appointment.id}>
               <CardContent className="p-6">
                 <div className="flex justify-between items-start">
@@ -313,7 +314,7 @@ export function MarketingCoordinatorDashboard({ currentPage }: MarketingCoordina
             <CardTitle>Appointments Overview</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {appointments.slice(0, 5).map((appt) => (
+            {marketingAppointments.slice(0, 5).map((appt) => (
               <div key={appt.id} className="flex justify-between items-center">
                 <div>
                   <p className="font-medium">{appt.clientName}</p>

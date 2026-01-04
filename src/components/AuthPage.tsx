@@ -95,7 +95,7 @@ export function AuthPage({ onLogin, onClose }: AuthPageProps) {
     setAuthError(null);
 
     try {
-      const role = inferRoleFromEmail(trimmedEmail);
+      const inferredRole = inferRoleFromEmail(trimmedEmail);
       const creds =
         mode === 'signup'
           ? await createUserWithEmailAndPassword(auth, trimmedEmail, pwd).catch(async (err) => {
@@ -123,11 +123,16 @@ export function AuthPage({ onLogin, onClose }: AuthPageProps) {
         setIsLoading(false);
         return;
       }
+      const storedRole = snap.exists() ? (snap.data() as { role?: User['role'] }).role : undefined;
+      const resolvedRole = storedRole ?? inferredRole;
       if (!snap.exists()) {
-        await setDoc(userRef, { balance: 0, transactions: [], role, name: displayName, email: trimmedEmail, archived: false });
+        await setDoc(userRef, { balance: 0, transactions: [], role: resolvedRole, name: displayName, email: trimmedEmail, archived: false });
       } else {
         // Merge role/name/email for consistency.
-        await setDoc(userRef, { role, name: displayName, email: trimmedEmail }, { merge: true });
+        const payload = storedRole
+          ? { name: displayName, email: trimmedEmail }
+          : { role: resolvedRole, name: displayName, email: trimmedEmail };
+        await setDoc(userRef, payload, { merge: true });
       }
       await ensureUserProfile(userId);
 
@@ -135,7 +140,7 @@ export function AuthPage({ onLogin, onClose }: AuthPageProps) {
         id: userId,
         name: displayName,
         email: creds.user.email || trimmedEmail,
-        role,
+        role: resolvedRole,
       };
       onLogin(user);
       onClose?.();
@@ -154,13 +159,40 @@ export function AuthPage({ onLogin, onClose }: AuthPageProps) {
     setIsLoading(true);
     setAuthError(null);
     try {
-      const role = inferRoleFromEmail(email || (auth.currentUser?.email ?? ''));
+      const inferredEmail = email || (auth.currentUser?.email ?? '');
+      const inferredRole = inferRoleFromEmail(inferredEmail);
       const creds = await signInWithPopup(auth, googleProvider);
+      const userId = creds.user.uid;
+      const displayName = creds.user.displayName || getNameForRole(inferredRole);
+      const userEmail = creds.user.email || inferredEmail || '';
+
+      // Ensure profile exists and block archived accounts for Google sign-in too.
+      const userRef = doc(db, 'users', userId);
+      const snap = await getDoc(userRef);
+      if (snap.exists() && (snap.data() as { archived?: boolean }).archived) {
+        setAuthError('This account is archived and cannot sign in.');
+        await auth.signOut();
+        setIsLoading(false);
+        return;
+      }
+      const storedRole = snap.exists() ? (snap.data() as { role?: User['role'] }).role : undefined;
+      const resolvedRole = storedRole ?? inferredRole;
+      // Don't overwrite existing balance/transactions when signing in again.
+      if (!snap.exists()) {
+        await setDoc(userRef, { balance: 0, transactions: [], role: resolvedRole, name: displayName, email: userEmail, archived: false });
+      } else {
+        const payload = storedRole
+          ? { name: displayName, email: userEmail }
+          : { role: resolvedRole, name: displayName, email: userEmail };
+        await setDoc(userRef, payload, { merge: true });
+      }
+      await ensureUserProfile(userId);
+
       const user: User = {
-        id: creds.user.uid,
-        name: creds.user.displayName || getNameForRole(role),
-        email: creds.user.email || email || '',
-        role,
+        id: userId,
+        name: displayName,
+        email: userEmail,
+        role: resolvedRole,
       };
       onLogin(user);
       onClose?.();

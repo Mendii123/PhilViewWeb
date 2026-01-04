@@ -15,8 +15,9 @@ import {
 } from 'lucide-react';
 import { fetchAllAppointments, type AppointmentRecord } from '@/lib/appointments';
 import { fetchProperties, type PropertyRecord } from '@/lib/properties';
-import { collection, onSnapshot, addDoc, doc, updateDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebaseClient';
+import { collection, onSnapshot, doc, setDoc, updateDoc } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { db, secondaryAuth } from '@/lib/firebaseClient';
 
 interface CompanyOwnerDashboardProps {
   currentPage: string;
@@ -50,7 +51,7 @@ export function CompanyOwnerDashboard({ currentPage }: CompanyOwnerDashboardProp
     clients: 0,
   });
   const [directors, setDirectors] = useState<DirectorUser[]>([]);
-  const [directorForm, setDirectorForm] = useState({ name: '', email: '' });
+  const [directorForm, setDirectorForm] = useState({ name: '', email: '', password: '', confirmPassword: '' });
 
   useEffect(() => {
     void fetchAllAppointments().then(setAppointments).catch(() => setAppointments([]));
@@ -111,19 +112,30 @@ export function CompanyOwnerDashboard({ currentPage }: CompanyOwnerDashboardProp
   }, [appointments, properties]);
 
   const createDirector = async () => {
-    if (!directorForm.name || !directorForm.email) {
-      alert('Enter name and email');
+    if (!directorForm.name || !directorForm.email || !directorForm.password || !directorForm.confirmPassword) {
+      alert('Enter name, email, and password');
+      return;
+    }
+    if (directorForm.password.length < 6) {
+      alert('Password must be at least 6 characters.');
+      return;
+    }
+    if (directorForm.password !== directorForm.confirmPassword) {
+      alert('Passwords do not match.');
       return;
     }
     try {
-      await addDoc(collection(db, 'users'), {
-        name: directorForm.name,
-        email: directorForm.email,
+      const email = directorForm.email.trim();
+      const creds = await createUserWithEmailAndPassword(secondaryAuth, email, directorForm.password);
+      await setDoc(doc(db, 'users', creds.user.uid), {
+        name: directorForm.name.trim(),
+        email,
         role: 'director',
         archived: false,
         createdAt: new Date().toISOString(),
       });
-      setDirectorForm({ name: '', email: '' });
+      await signOut(secondaryAuth);
+      setDirectorForm({ name: '', email: '', password: '', confirmPassword: '' });
     } catch (error) {
       console.error('Failed to create director', error);
       alert('Could not create director. Check console for details.');
@@ -166,6 +178,26 @@ export function CompanyOwnerDashboard({ currentPage }: CompanyOwnerDashboardProp
                   value={directorForm.email}
                   onChange={(e) => setDirectorForm((p) => ({ ...p, email: e.target.value }))}
                   placeholder="director@email.com"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium block mb-1">Password</label>
+                <Input
+                  type="password"
+                  value={directorForm.password}
+                  onChange={(e) => setDirectorForm((p) => ({ ...p, password: e.target.value }))}
+                  placeholder="Minimum 6 characters"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium block mb-1">Confirm Password</label>
+                <Input
+                  type="password"
+                  value={directorForm.confirmPassword}
+                  onChange={(e) => setDirectorForm((p) => ({ ...p, confirmPassword: e.target.value }))}
+                  placeholder="Re-enter password"
                 />
               </div>
             </div>

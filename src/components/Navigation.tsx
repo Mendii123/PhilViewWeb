@@ -93,6 +93,7 @@ export function Navigation({ currentUser, onLogout, onNavigate, currentPage, onO
         return [
           { id: 'dashboard', label: 'Dashboard' },
           { id: 'clients', label: 'Clients' },
+          { id: 'appointments', label: 'Appointments' },
           { id: 'properties', label: 'Properties' },
           { id: 'inquiries', label: 'Inquiries' }
         ];

@@ -20,8 +20,9 @@ import {
 import { fetchInquiries, type InquiryRecord } from '@/lib/inquiries';
 import { fetchAllAppointments, type AppointmentRecord } from '@/lib/appointments';
 import { fetchProperties, type PropertyRecord } from '@/lib/properties';
-import { db } from '@/lib/firebaseClient';
-import { addDoc, collection, doc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { db, secondaryAuth } from '@/lib/firebaseClient';
+import { collection, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 
 interface DirectorDashboardProps {
   currentPage: string;
@@ -68,7 +69,13 @@ export function DirectorDashboard({ currentPage }: DirectorDashboardProps) {
   const [clientsCount, setClientsCount] = useState(0);
   const [interiors, setInteriors] = useState<InteriorRequest[]>(mockInteriorRequests);
   const [selectedInterior, setSelectedInterior] = useState<InteriorRequest | null>(null);
-  const [staffForm, setStaffForm] = useState({ name: '', email: '', role: 'broker' as StaffUser['role'] });
+  const [staffForm, setStaffForm] = useState({
+    name: '',
+    email: '',
+    role: 'broker' as StaffUser['role'],
+    password: '',
+    confirmPassword: '',
+  });
 
   useEffect(() => {
     void fetchInquiries().then(setInquiries).catch(() => setInquiries([]));
@@ -81,7 +88,7 @@ export function DirectorDashboard({ currentPage }: DirectorDashboardProps) {
       const staffUsers: StaffUser[] = [];
       let clientCounter = 0;
       snap.forEach((d) => {
-        const data = d.data() as Partial<StaffUser> & { role?: string; archived?: boolean };
+        const data = d.data() as { role?: string; archived?: boolean; name?: string; email?: string };
         if (data.role === 'client') {
           clientCounter += 1;
         }
@@ -90,7 +97,7 @@ export function DirectorDashboard({ currentPage }: DirectorDashboardProps) {
             id: d.id,
             name: data.name ?? 'Staff',
             email: data.email ?? '',
-            role: data.role,
+            role: data.role as StaffUser['role'],
             archived: data.archived ?? false,
           });
         }
@@ -128,19 +135,30 @@ export function DirectorDashboard({ currentPage }: DirectorDashboardProps) {
   }, [appointments, inquiries, properties]);
 
   const createStaffAccount = async () => {
-    if (!staffForm.name || !staffForm.email) {
-      alert('Please enter name and email.');
+    if (!staffForm.name || !staffForm.email || !staffForm.password || !staffForm.confirmPassword) {
+      alert('Please enter name, email, and password.');
+      return;
+    }
+    if (staffForm.password.length < 6) {
+      alert('Password must be at least 6 characters.');
+      return;
+    }
+    if (staffForm.password !== staffForm.confirmPassword) {
+      alert('Passwords do not match.');
       return;
     }
     try {
-      await addDoc(collection(db, 'users'), {
-        name: staffForm.name,
-        email: staffForm.email,
+      const email = staffForm.email.trim();
+      const creds = await createUserWithEmailAndPassword(secondaryAuth, email, staffForm.password);
+      await setDoc(doc(db, 'users', creds.user.uid), {
+        name: staffForm.name.trim(),
+        email,
         role: staffForm.role,
         archived: false,
         createdAt: new Date().toISOString(),
       });
-      setStaffForm({ name: '', email: '', role: 'broker' });
+      await signOut(secondaryAuth);
+      setStaffForm({ name: '', email: '', role: 'broker', password: '', confirmPassword: '' });
     } catch (error) {
       console.error('Failed to create staff account', error);
       alert('Could not create staff account. See console for details.');
@@ -422,6 +440,26 @@ export function DirectorDashboard({ currentPage }: DirectorDashboardProps) {
                   <option value="accountant">Accountant</option>
                   <option value="marketing">Marketing Coordinator</option>
                 </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium block mb-1">Password</label>
+                <Input
+                  type="password"
+                  value={staffForm.password}
+                  onChange={(e) => setStaffForm((p) => ({ ...p, password: e.target.value }))}
+                  placeholder="Minimum 6 characters"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium block mb-1">Confirm Password</label>
+                <Input
+                  type="password"
+                  value={staffForm.confirmPassword}
+                  onChange={(e) => setStaffForm((p) => ({ ...p, confirmPassword: e.target.value }))}
+                  placeholder="Re-enter password"
+                />
               </div>
             </div>
             <Button onClick={createStaffAccount}>

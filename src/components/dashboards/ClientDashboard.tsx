@@ -29,7 +29,7 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
   const [viewMode, setViewMode] = useState<'grid' | 'map'>('grid');
   const [appointmentDate, setAppointmentDate] = useState('');
   const [appointmentTime, setAppointmentTime] = useState('10:00');
-  const [appointmentType, setAppointmentType] = useState<'Viewing' | 'Consultation'>('Viewing');
+  const [appointmentType, setAppointmentType] = useState<AppointmentRecord['type']>('Residential Consultation');
   const [appointmentNotes, setAppointmentNotes] = useState('');
   const [contactPreference, setContactPreference] = useState('');
   const [selectedPropertyId, setSelectedPropertyId] = useState<string | 'none'>('none');
@@ -60,6 +60,20 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
     return appointmentIdRef.current.toString();
   };
 
+  const getConsultationTypeForProperty = (property: Property | null): AppointmentRecord['type'] => {
+    if (!property) return 'Residential Consultation';
+    const typeLower = (property.type ?? '').toLowerCase();
+    if (typeLower.includes('industrial')) return 'Industrial Consultation';
+    if (typeLower.includes('commercial')) return 'Commercial Consultation';
+    return 'Residential Consultation';
+  };
+
+  const getDepartmentForType = (type: AppointmentRecord['type']): AppointmentRecord['department'] => {
+    if (type === 'Payment/Balance Consultation') return 'accountant';
+    if (type === 'Venues & Events Consultation') return 'marketing';
+    return 'broker';
+  };
+
   // Keep responded list in sync
   useEffect(() => {
     setRespondedAppointments(
@@ -73,7 +87,7 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
       dateValue: string,
       timeValue: string,
       silent?: boolean,
-      typeValue: 'Viewing' | 'Consultation' = 'Viewing',
+      typeValue: AppointmentRecord['type'] = 'Residential Consultation',
       notesValue?: string,
       contactValue?: string
     ) => {
@@ -88,6 +102,7 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
         time: timeValue,
         status: 'Pending',
         type: typeValue,
+        department: getDepartmentForType(typeValue),
         notes: notesValue,
         contact: contactValue,
         persisted: false,
@@ -110,7 +125,7 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
       setSelectedPropertyId('none');
       setAppointmentNotes('');
       setContactPreference('');
-      setAppointmentType('Viewing');
+      setAppointmentType('Residential Consultation');
 
       setRespondedAppointments((prev) => prev);
     },
@@ -261,7 +276,7 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
     const today = new Date().toISOString().split('T')[0];
     setAppointmentDate(appointmentPrefill?.date || today);
     setAppointmentTime(appointmentPrefill?.time || '10:00');
-    setAppointmentType('Viewing');
+    setAppointmentType(getConsultationTypeForProperty(property ?? null));
     setAppointmentNotes('');
     setContactPreference('');
 
@@ -269,7 +284,7 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
     if (appointmentPrefill?.autoSubmit && property) {
       const dateValue = appointmentPrefill.date || today;
       const timeValue = appointmentPrefill.time || '10:00';
-      createAppointment(property, dateValue, timeValue, true);
+      createAppointment(property, dateValue, timeValue, true, getConsultationTypeForProperty(property));
       lastPrefillNonce.current = incomingNonce;
     } else {
       lastPrefillNonce.current = incomingNonce;
@@ -348,6 +363,7 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
               setSelectedPropertyId('none');
               setShowAppointmentForm(true);
               setIsFormCollapsed(false);
+              setAppointmentType('Residential Consultation');
             }}
           >
             Schedule New Appointment
@@ -433,10 +449,13 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
                     <select
                       className="w-full px-3 py-2 border rounded-md bg-white"
                       value={appointmentType}
-                      onChange={(e) => setAppointmentType(e.target.value as 'Viewing' | 'Consultation')}
+                      onChange={(e) => setAppointmentType(e.target.value as AppointmentRecord['type'])}
                     >
-                      <option value="Viewing">Viewing</option>
-                      <option value="Consultation">Consultation</option>
+                      <option value="Payment/Balance Consultation">Accountant - Payment/Balance Consultation</option>
+                      <option value="Residential Consultation">Broker - Residential Consultation</option>
+                      <option value="Industrial Consultation">Broker - Industrial Consultation</option>
+                      <option value="Commercial Consultation">Broker - Commercial Consultation</option>
+                      <option value="Venues & Events Consultation">Marketing Coordinator - Venues & Events Consultation</option>
                     </select>
                   </div>
                   <div>
@@ -487,7 +506,7 @@ export function ClientDashboard({ currentPage, onNavigate, appointmentPrefill, c
                         setContactPreference('');
                         setAppointmentDate('');
                         setAppointmentTime('10:00');
-                        setAppointmentType('Viewing');
+                        setAppointmentType('Residential Consultation');
                         setIsFormCollapsed(true);
                       }}
                     >
@@ -754,6 +773,7 @@ if (currentPage === 'company') {
                   setSelectedPropertyId(property.id);
                   setShowAppointmentForm(true);
                   setIsFormCollapsed(false);
+                  setAppointmentType(getConsultationTypeForProperty(property));
                   onNavigate('appointments');
                 }}
               />
@@ -823,6 +843,7 @@ if (currentPage === 'company') {
                         setSelectedPropertyId(selectedProperty.id);
                         setShowAppointmentForm(true);
                         setIsFormCollapsed(false);
+                        setAppointmentType(getConsultationTypeForProperty(selectedProperty));
                         onNavigate('appointments');
                       }}
                     >

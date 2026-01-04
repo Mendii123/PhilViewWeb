@@ -19,6 +19,7 @@ export function BrokerDashboard({ currentPage }: BrokerDashboardProps) {
   const [inquiries, setInquiries] = useState<InquiryRecord[]>(mockInquiries);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>(mockAppointments as AppointmentRecord[]);
   const [isLoading, setIsLoading] = useState(false);
+  const brokerAppointments = appointments.filter((a) => (a.department ?? 'broker') === 'broker');
 
   useEffect(() => {
     let isMounted = true;
@@ -158,7 +159,7 @@ export function BrokerDashboard({ currentPage }: BrokerDashboardProps) {
         <h1 className="text-3xl font-bold mb-8">Appointment Requests</h1>
 
         <div className="space-y-4">
-          {appointments.map((appointment) => (
+          {brokerAppointments.map((appointment) => (
             <Card key={appointment.id}>
               <CardContent className="p-6">
                 <div className="flex justify-between items-start">
@@ -296,7 +297,7 @@ export function BrokerDashboard({ currentPage }: BrokerDashboardProps) {
             <Calendar className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{appointments.filter(a => a.status === 'Pending').length}</div>
+            <div className="text-2xl font-bold">{brokerAppointments.filter(a => a.status === 'Pending').length}</div>
             <p className="text-xs text-muted-foreground">Awaiting confirmation</p>
           </CardContent>
         </Card>
@@ -341,7 +342,7 @@ export function BrokerDashboard({ currentPage }: BrokerDashboardProps) {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {appointments.slice(0, 2).map((appointment) => (
+              {brokerAppointments.slice(0, 2).map((appointment) => (
                 <div key={appointment.id} className="flex justify-between items-center">
                   <div>
                     <p className="font-medium">{appointment.clientName}</p>

@@ -5,13 +5,15 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Badge } from '../ui/badge';
+import { Textarea } from '../ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { Users, DollarSign, Building, Plus, Edit, Save, Trash2, MessageSquare, User as UserIcon } from 'lucide-react';
-import { mockClients, mockProperties, Client, Property } from '../data/mockData';
+import { mockProperties, Client, Property } from '../data/mockData';
 import { fetchProperties, type PropertyRecord } from '@/lib/properties';
 import { addDoc, collection, deleteDoc, doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebaseClient';
 import { fetchInquiries, respondToInquiry, type InquiryRecord } from '@/lib/inquiries';
+import { updateAppointmentStatus, type AppointmentRecord } from '@/lib/appointments';
 
 interface AccountantDashboardProps {
   currentPage: string;
@@ -21,24 +23,27 @@ const DEFAULT_IMAGE =
   'https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?auto=format&fit=crop&w=1200&q=80';
 const FIELD_CLASS =
   'bg-white border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50';
+type ClientTransaction = { label: string; amount: number; date: string; type: 'credit' | 'debit' };
 type LocalClient = Client & {
   contact?: string;
-  transactions?: Array<{ label: string; amount: number; date: string; type: 'credit' | 'debit' }>;
+  transactions?: ClientTransaction[];
   credits?: number;
   debits?: number;
   available?: number;
 };
-type EditableClient = LocalClient & {
-  balance: string | number;
-  credits?: string | number;
-  debits?: string | number;
-  available?: string | number;
+type EditableClient = Omit<LocalClient, 'balance' | 'credits' | 'debits' | 'available'> & {
+  balance: string;
+  credits?: string;
+  debits?: string;
+  available?: string;
 };
 
 export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
-  const [clients, setClients] = useState<LocalClient[]>(mockClients);
+  const [clients, setClients] = useState<LocalClient[]>([]);
+  const [clientSearch, setClientSearch] = useState('');
   const [properties, setProperties] = useState<PropertyRecord[]>(mockProperties);
   const [isLoadingProperties, setIsLoadingProperties] = useState(false);
+  const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [editingClient, setEditingClient] = useState<string | null>(null);
   const [editingProperty, setEditingProperty] = useState<string | null>(null);
   const [editingPropertyData, setEditingPropertyData] = useState<(PropertyRecord & { priceInput?: string }) | null>(null);
@@ -78,6 +83,17 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
   const [selectedInquiry, setSelectedInquiry] = useState<InquiryRecord | null>(null);
   const [responseText, setResponseText] = useState('');
 
+  const toEditableClient = React.useCallback(
+    (client: LocalClient): EditableClient => ({
+      ...client,
+      balance: String(client.balance ?? ''),
+      credits: String(client.credits ?? ''),
+      debits: String(client.debits ?? ''),
+      available: String(client.available ?? ''),
+    }),
+    []
+  );
+
   const loadProperties = React.useCallback(async () => {
     setIsLoadingProperties(true);
     try {
@@ -102,17 +118,24 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
   // Load clients from Firestore (realtime)
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'users'), (snap) => {
-      const loaded: LocalClient[] = snap.docs.map((d) => {
-        const data = d.data() as Partial<LocalClient & { archived?: boolean }>;
-        const transactions = Array.isArray(data.transactions) ? (data.transactions as LocalClient['transactions']) : [];
-        const creditsCalc = typeof (data as { credits?: number }).credits === 'number'
-          ? (data as { credits?: number }).credits
+      const dedup = new Map<string, LocalClient>();
+      snap.docs.forEach((d) => {
+        const data = d.data() as Partial<LocalClient & { archived?: boolean; role?: string }>;
+        const roleVal = (data as { role?: string }).role;
+        if (roleVal && roleVal !== 'client') return; // only customers; allow missing role as legacy
+        const transactions: ClientTransaction[] = Array.isArray(data.transactions)
+          ? (data.transactions as ClientTransaction[])
+          : [];
+        const creditsField = (data as { credits?: number }).credits;
+        const creditsCalc = typeof creditsField === 'number'
+          ? creditsField
           : transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-        const debitsCalc = typeof (data as { debits?: number }).debits === 'number'
-          ? (data as { debits?: number }).debits
+        const debitsField = (data as { debits?: number }).debits;
+        const debitsCalc = typeof debitsField === 'number'
+          ? debitsField
           : transactions.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0);
         const balanceVal = typeof data.balance === 'number' ? data.balance : 0;
-        return {
+        dedup.set(d.id, {
           id: d.id,
           name: data.name ?? 'Unnamed',
           email: data.email ?? '',
@@ -128,12 +151,12 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
           joinDate: data.joinDate ?? new Date().toISOString().split('T')[0],
           contact: data.contact,
           transactions,
-        };
+        });
       });
-      setClients(loaded);
+      setClients(Array.from(dedup.values()));
     }, (err) => {
       console.error('Failed to load clients', err);
-      setClients(mockClients);
+      setClients([]);
     });
     return () => unsub();
   }, []);
@@ -160,6 +183,37 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
     }, (err) => {
       console.error('Failed to load inquiries', err);
       void fetchInquiries().then(setInquiries).catch(() => setInquiries([]));
+    });
+    return () => unsub();
+  }, []);
+
+  // Load appointments (realtime) - for Payment/Balance consultations
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'appointments'), (snap) => {
+      const loaded = snap.docs.map((d) => {
+        const data = d.data() as Partial<AppointmentRecord>;
+        return {
+          id: d.id,
+          userId: (data as { userId?: string }).userId ?? '',
+          clientName: data.clientName ?? '',
+          clientEmail: data.clientEmail ?? '',
+          propertyId: data.propertyId ?? '',
+          propertyName: data.propertyName ?? '',
+          date: data.date ?? '',
+          time: data.time ?? '',
+          status: (data.status as AppointmentRecord['status']) ?? 'Pending',
+          type: (data.type as AppointmentRecord['type']) ?? 'Residential Consultation',
+          department: (data as { department?: AppointmentRecord['department'] }).department,
+          notes: (data as { notes?: string }).notes,
+          contact: (data as { contact?: string }).contact,
+          responseNote: data.responseNote,
+          persisted: true,
+        } as AppointmentRecord;
+      });
+      setAppointments(loaded);
+    }, (err) => {
+      console.error('Failed to load appointments', err);
+      setAppointments([]);
     });
     return () => unsub();
   }, []);
@@ -197,6 +251,22 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
   };
 
   const formatPeso = (value: number) => `PHP ${value.toLocaleString('en-PH')}`;
+
+  const filteredClients = React.useMemo(() => {
+    const query = clientSearch.trim().toLowerCase();
+    if (!query) return clients;
+    return clients.filter((client) => {
+      const haystack = [
+        client.name,
+        client.email,
+        client.phone,
+        client.contact ?? '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [clients, clientSearch]);
 
   const createNewProperty = async () => {
     const priceRaw = typeof newPropertyData.price === 'string' ? newPropertyData.price.trim() : String(newPropertyData.price ?? '');
@@ -316,6 +386,17 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
       alert('Please fill in required fields');
       return;
     }
+    const emailLower = newClientData.email.trim().toLowerCase();
+    const phoneTrim = newClientData.phone.trim();
+    const hasDuplicate = clients.some((c) => {
+      const matchesEmail = emailLower && c.email?.toLowerCase() === emailLower;
+      const matchesPhone = phoneTrim && c.phone && c.phone === phoneTrim;
+      return matchesEmail || matchesPhone;
+    });
+    if (hasDuplicate) {
+      alert('A client with this email or phone already exists.');
+      return;
+    }
 
     const creditsCalc =
       newClientData.credits !== ''
@@ -360,8 +441,8 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
         transactions: [],
         archived: false,
         status: 'Active',
+        role: 'client',
       });
-      setClients(prev => [...prev, { ...newClient, id: docRef.id }]);
       setNewClientData({
         name: '',
         email: '',
@@ -378,6 +459,105 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
       alert('Could not create client. Check console for details.');
     }
   };
+
+  const accountantAppointments = appointments.filter((a) => {
+    const dept = a.department ?? (a.type === 'Payment/Balance Consultation' ? 'accountant' : 'broker');
+    return dept === 'accountant';
+  });
+
+  if (currentPage === 'appointments') {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <h1 className="text-3xl font-bold mb-8">Appointment Requests</h1>
+        <p className="text-sm text-muted-foreground mb-6">Payment/Balance consultations assigned to accountants.</p>
+
+        <div className="space-y-4">
+          {accountantAppointments.map((appointment) => (
+            <Card key={appointment.id}>
+              <CardContent className="p-6">
+                <div className="flex justify-between items-start">
+                  <div className="space-y-2">
+                    <div className="flex items-center space-x-2">
+                      <h3 className="font-semibold">{appointment.clientName}</h3>
+                      <Badge variant={
+                        appointment.status === 'Pending' ? 'secondary' :
+                        appointment.status === 'Confirmed' ? 'default' :
+                        appointment.status === 'Completed' ? 'outline' : 'destructive'
+                      }>
+                        {appointment.status}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground">{appointment.clientEmail}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {appointment.date} at {appointment.time} · {appointment.type}
+                    </p>
+                    {appointment.notes ? (
+                      <p className="text-sm text-muted-foreground">Notes: {appointment.notes}</p>
+                    ) : null}
+                    {appointment.contact ? (
+                      <p className="text-sm text-muted-foreground">Contact: {appointment.contact}</p>
+                    ) : null}
+                    {appointment.responseNote ? (
+                      <p className="text-sm text-muted-foreground">Response: {appointment.responseNote}</p>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2">
+                    {appointment.status === 'Pending' ? (
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={async () => {
+                            setAppointments((prev) =>
+                              prev.map((a) =>
+                                a.id === appointment.id
+                                  ? { ...a, status: 'Confirmed', responseNote: 'Confirmed by accountant' }
+                                  : a
+                              )
+                            );
+                            if (appointment.persisted !== false) {
+                              try {
+                                await updateAppointmentStatus(appointment.id, 'Confirmed', 'Confirmed by accountant');
+                              } catch (error) {
+                                console.error('Failed to confirm appointment', error);
+                              }
+                            }
+                          }}
+                        >
+                          Confirm
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={async () => {
+                            setAppointments((prev) =>
+                              prev.map((a) =>
+                                a.id === appointment.id
+                                  ? { ...a, status: 'Cancelled', responseNote: 'Declined by accountant' }
+                                  : a
+                              )
+                            );
+                            if (appointment.persisted !== false) {
+                              try {
+                                await updateAppointmentStatus(appointment.id, 'Cancelled', 'Declined by accountant');
+                              } catch (error) {
+                                console.error('Failed to decline appointment', error);
+                              }
+                            }
+                          }}
+                        >
+                          Decline
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   if (currentPage === 'clients') {
     return (
@@ -467,10 +647,10 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                       name: '',
                       email: '',
                       phone: '',
-                      balance: 0,
-                      credits: 0,
-                      debits: 0,
-                      available: 0,
+                      balance: '',
+                      credits: '',
+                      debits: '',
+                      available: '',
                       contact: '',
                     })}
                   >
@@ -570,11 +750,23 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
         </Card>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle>Client List</CardTitle>
+            <div className="w-full sm:max-w-sm">
+              <Input
+                value={clientSearch}
+                onChange={(e) => setClientSearch(e.target.value)}
+                placeholder="Search name, email, phone..."
+                className={FIELD_CLASS}
+              />
+            </div>
           </CardHeader>
-          <CardContent>
-            <Table>
+          <CardContent className="overflow-hidden">
+            <div className="pb-3 text-sm text-muted-foreground">
+              Showing {filteredClients.length} of {clients.length}
+            </div>
+            <div className="overflow-x-auto max-h-[600px]">
+              <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
@@ -591,16 +783,17 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {clients.map((client) => (
-                  <TableRow key={client.id}>
+              {filteredClients.map((client) => (
+                <TableRow key={client.id}>
                     <TableCell className="font-medium">
                       {editingClient === client.id ? (
                         <Input
                           value={editingClientData?.name ?? client.name}
                           onChange={(e) =>
-                            setEditingClientData((prev) =>
-                              prev ? { ...prev, name: e.target.value } : { ...client, name: e.target.value }
-                            )
+                            setEditingClientData((prev) => {
+                              const base = prev ?? toEditableClient(client);
+                              return { ...base, name: e.target.value };
+                            })
                           }
                         />
                       ) : (
@@ -612,9 +805,10 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                         <Input
                           value={editingClientData?.email ?? client.email}
                           onChange={(e) =>
-                            setEditingClientData((prev) =>
-                              prev ? { ...prev, email: e.target.value } : { ...client, email: e.target.value }
-                            )
+                            setEditingClientData((prev) => {
+                              const base = prev ?? toEditableClient(client);
+                              return { ...base, email: e.target.value };
+                            })
                           }
                         />
                       ) : (
@@ -626,9 +820,10 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                         <Input
                           value={editingClientData?.phone ?? client.phone}
                           onChange={(e) =>
-                            setEditingClientData((prev) =>
-                              prev ? { ...prev, phone: e.target.value } : { ...client, phone: e.target.value }
-                            )
+                            setEditingClientData((prev) => {
+                              const base = prev ?? toEditableClient(client);
+                              return { ...base, phone: e.target.value };
+                            })
                           }
                         />
                       ) : (
@@ -640,9 +835,10 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                         <Input
                           value={editingClientData?.contact ?? client.contact ?? ''}
                           onChange={(e) =>
-                            setEditingClientData((prev) =>
-                              prev ? { ...prev, contact: e.target.value } : { ...client, contact: e.target.value }
-                            )
+                            setEditingClientData((prev) => {
+                              const base = prev ?? toEditableClient(client);
+                              return { ...base, contact: e.target.value };
+                            })
                           }
                         />
                       ) : (
@@ -652,23 +848,18 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                     <TableCell>
                       {editingClient === client.id ? (
                         <div className="flex items-center space-x-2">
-                      <Input
-                        type="number"
-                        value={
-                          editingClientData?.balance !== undefined
-                            ? String(editingClientData.balance)
-                            : String(client.balance)
-                        }
-                        onChange={(e) =>
-                          setEditingClientData((prev) =>
-                            prev
-                              ? { ...prev, balance: e.target.value }
-                              : { ...client, balance: e.target.value }
-                          )
-                        }
-                        className="w-32"
-                        inputMode="decimal"
-                      />
+                          <Input
+                            type="number"
+                            value={editingClientData?.balance ?? String(client.balance)}
+                            onChange={(e) =>
+                              setEditingClientData((prev) => {
+                                const base = prev ?? toEditableClient(client);
+                                return { ...base, balance: e.target.value };
+                              })
+                            }
+                            className="w-32"
+                            inputMode="decimal"
+                          />
                         </div>
                       ) : (
                         <span>{formatPeso(client.balance)}</span>
@@ -678,15 +869,12 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                       {editingClient === client.id ? (
                         <Input
                           type="number"
-                          value={
-                            editingClientData?.credits !== undefined
-                              ? String(editingClientData.credits)
-                              : String(client.credits ?? 0)
-                          }
+                          value={editingClientData?.credits ?? String(client.credits ?? 0)}
                           onChange={(e) =>
-                            setEditingClientData((prev) =>
-                              prev ? { ...prev, credits: e.target.value } : { ...client, credits: e.target.value }
-                            )
+                            setEditingClientData((prev) => {
+                              const base = prev ?? toEditableClient(client);
+                              return { ...base, credits: e.target.value };
+                            })
                           }
                         />
                       ) : (
@@ -697,15 +885,12 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                       {editingClient === client.id ? (
                         <Input
                           type="number"
-                          value={
-                            editingClientData?.debits !== undefined
-                              ? String(editingClientData.debits)
-                              : String(client.debits ?? 0)
-                          }
+                          value={editingClientData?.debits ?? String(client.debits ?? 0)}
                           onChange={(e) =>
-                            setEditingClientData((prev) =>
-                              prev ? { ...prev, debits: e.target.value } : { ...client, debits: e.target.value }
-                            )
+                            setEditingClientData((prev) => {
+                              const base = prev ?? toEditableClient(client);
+                              return { ...base, debits: e.target.value };
+                            })
                           }
                         />
                       ) : (
@@ -716,17 +901,12 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                       {editingClient === client.id ? (
                         <Input
                           type="number"
-                          value={
-                            editingClientData?.available !== undefined
-                              ? String(editingClientData.available)
-                              : String(client.available ?? client.balance)
-                          }
+                          value={editingClientData?.available ?? String(client.available ?? client.balance)}
                           onChange={(e) =>
-                            setEditingClientData((prev) =>
-                              prev
-                                ? { ...prev, available: e.target.value }
-                                : { ...client, available: e.target.value }
-                            )
+                            setEditingClientData((prev) => {
+                              const base = prev ?? toEditableClient(client);
+                              return { ...base, available: e.target.value };
+                            })
                           }
                         />
                       ) : (
@@ -746,22 +926,14 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                             size="sm"
                             onClick={async () => {
                               if (!editingClientData) return;
-                              const balanceVal =
-                                editingClientData.balance === '' || editingClientData.balance === undefined
-                                  ? 0
-                                  : Number(editingClientData.balance);
-                              const creditsVal =
-                                editingClientData.credits === '' || editingClientData.credits === undefined
-                                  ? 0
-                                  : Number(editingClientData.credits);
-                              const debitsVal =
-                                editingClientData.debits === '' || editingClientData.debits === undefined
-                                  ? 0
-                                  : Number(editingClientData.debits);
+                              const balanceVal = editingClientData.balance.trim() === '' ? 0 : Number(editingClientData.balance);
+                              const creditsRaw = editingClientData.credits ?? '';
+                              const debitsRaw = editingClientData.debits ?? '';
+                              const availableRaw = editingClientData.available ?? '';
+                              const creditsVal = creditsRaw.trim() === '' ? 0 : Number(creditsRaw);
+                              const debitsVal = debitsRaw.trim() === '' ? 0 : Number(debitsRaw);
                               const availableVal =
-                                editingClientData.available === '' || editingClientData.available === undefined
-                                  ? balanceVal + creditsVal + debitsVal
-                                  : Number(editingClientData.available);
+                                availableRaw.trim() === '' ? balanceVal + creditsVal + debitsVal : Number(availableRaw);
                               const updatedClient: LocalClient = {
                                 ...client,
                                 ...editingClientData,
@@ -812,13 +984,7 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                           variant="outline"
                           onClick={() => {
                             setEditingClient(client.id);
-                            setEditingClientData({
-                              ...client,
-                              balance: String(client.balance ?? ''),
-                              credits: String(client.credits ?? ''),
-                              debits: String(client.debits ?? ''),
-                              available: String(client.available ?? ''),
-                            });
+                            setEditingClientData(toEditableClient(client));
                           }}
                         >
                           <Edit className="h-4 w-4" />
@@ -841,7 +1007,8 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+              </Table>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -1193,7 +1360,9 @@ export function AccountantDashboard({ currentPage }: AccountantDashboardProps) {
                           value={editingPropertyData?.status ?? property.status}
                           onChange={(e) =>
                             setEditingPropertyData((prev) =>
-                              prev ? { ...prev, status: e.target.value } : { ...property, status: e.target.value }
+                              prev
+                                ? { ...prev, status: e.target.value as PropertyRecord['status'] }
+                                : { ...property, status: e.target.value as PropertyRecord['status'] }
                             )
                           }
                         >

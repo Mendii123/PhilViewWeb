@@ -12,12 +12,28 @@ import {
 import { db } from "./firebaseClient";
 import type { Appointment } from "@/components/data/mockData";
 
+export type AppointmentDepartment = "broker" | "accountant" | "marketing";
+
 export type AppointmentRecord = Appointment & {
   userId: string;
+  department?: AppointmentDepartment;
+  notes?: string;
+  contact?: string;
   responseNote?: string;
   createdAt?: Date;
   updatedAt?: Date;
   persisted?: boolean;
+};
+
+const inferDepartmentFromType = (type?: Appointment["type"]): AppointmentDepartment => {
+  switch (type) {
+    case "Payment/Balance Consultation":
+      return "accountant";
+    case "Venues & Events Consultation":
+      return "marketing";
+    default:
+      return "broker";
+  }
 };
 
 const mapDoc = (d: { id: string; data: () => Record<string, unknown> }): AppointmentRecord => {
@@ -33,6 +49,9 @@ const mapDoc = (d: { id: string; data: () => Record<string, unknown> }): Appoint
     time: data.time ?? "",
     status: (data.status as AppointmentRecord["status"]) ?? "Pending",
     type: (data.type as AppointmentRecord["type"]) ?? "Viewing",
+    department:
+      (data as { department?: AppointmentDepartment }).department ??
+      inferDepartmentFromType((data.type as Appointment["type"]) ?? undefined),
     notes: (data as { notes?: string }).notes,
     contact: (data as { contact?: string }).contact,
     responseNote: data.responseNote,

@@ -35,7 +35,15 @@ export interface Appointment {
   date: string;
   time: string;
   status: 'Pending' | 'Confirmed' | 'Completed' | 'Cancelled';
-  type: 'Viewing' | 'Consultation' | 'Documentation';
+  type:
+    | 'Payment/Balance Consultation'
+    | 'Residential Consultation'
+    | 'Industrial Consultation'
+    | 'Commercial Consultation'
+    | 'Venues & Events Consultation'
+    | 'Viewing'
+    | 'Consultation'
+    | 'Documentation';
 }
 
 export interface Inquiry {
